@@ -1,0 +1,689 @@
+---
+title: "CEVE 543 Fall 2025 Lab 4: Bayesian Rainfall Analysis"
+subtitle: "Iterative prior specification, Bayesian GEV workflow, Two-station comparison with ArviZ.jl"
+author: CEVE 543 Fall 2025
+date: "2025-09-19"
+type: "lab"
+module: 1
+week: 4
+objectives:
+  - "Set up Bayesian GEV models with informative priors"
+  - "Develop strategies for prior specification in extreme value analysis"
+  - "Compare rainfall patterns between two stations using Bayesian inference"
+ps_connection: "Builds Bayesian GEV toolkit for PS1 Tasks 1 and 3"
+
+engine: julia
+
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-block-bg: "#f8f8f8"
+    code-block-border-left: "#e1e4e5"
+    theme: simplex
+    number-sections: true
+    fig-format: svg
+    code-annotations: hover
+  typst:
+    fontsize: 11pt
+    margin:
+      x: 1in
+      y: 1in
+    number-sections: true
+    fig-format: svg
+    echo: false
+    code-annotations: false
+
+execute:
+  cache: false
+  freeze: auto
+
+# Code formatting options
+code-overflow: wrap
+code-line-numbers: false
+code-block-font-size: "0.85em"
+---
+
+## Do Before Lab {.unnumbered}
+
+1. **Accept the assignment.** Use the GitHub Classroom link posted on Canvas to "accept" the assignment, which will give you your own GitHub repository.
+2. **Clone your repository** to your computer using GitHub Desktop or the command line.
+3. **Open the repository in VS Code** directly from VS Code, GitHub Desktop, or your command line.
+4. **Activate the Julia environment.** In VS Code, open the command palette (View → Command Palette) and type "Julia: Start REPL". Alternatively, run `julia --project=.` in the terminal, then run `using Pkg; Pkg.instantiate()` to install required packages. The easiest method is to type `]` in the REPL to enter package mode, then type `instantiate`.
+5. **Review the Bayesian workflow concepts** from Module 1, particularly prior specification and posterior inference.
+6. **Verify rendering works.** Run `quarto render index.qmd` in your terminal - it should create both PDF and HTML documents.
+
+## Do During Lab {.unnumbered}
+
+This lab guides you through implementing a complete Bayesian workflow for extreme value analysis:
+
+1. **Develop iterative priors** using domain knowledge and prior predictive checks
+2. **Implement Bayesian GEV inference** using Turing.jl with informative priors
+3. **Compare two stations** using the same Bayesian framework
+4. **Validate your models** using modern Bayesian diagnostics with ArviZ.jl
+
+As with previous labs, you do not need to write code from scratch -- focus on understanding the workflow, modifying parameters, and interpreting results.
+
+To submit your work, push your changes to GitHub, render to PDF, and upload the PDF to Canvas.
+
+## Your Analysis {.unnumbered}
+
+::: {.callout-important}
+## Instructions
+Delete this entire section (including the "Do Before Lab" and "Do During Lab" sections above) and replace it with your analysis responses. Use the numbered format below for your final submission.
+:::
+
+**Response 1: Prior Evolution and Justification**
+*How did your understanding of Houston's extreme rainfall evolve through the iterative prior specification process? What knowledge sources proved most valuable for extreme value analysis?*
+
+**Response 2: Data Learning and Posterior Insights**
+*How did the observed data change your prior beliefs about GEV parameters? What does this reveal about the balance between domain knowledge and empirical evidence in Bayesian analysis?*
+
+**Response 3: Two-Station Bayesian Comparison**
+*Should the same priors apply to both stations? How do posterior differences relate to geographic and climatic factors, and what are the implications for regional analysis?*
+
+**Response 4: Uncertainty Quantification and Model Validation**
+*How does Bayesian uncertainty quantification compare to MLE approaches? What do the diagnostic results tell you about model reliability?*
+
+**Response 5: Bayesian Workflow for PS1**
+*How will this iterative workflow experience help you tackle regional extreme value analysis in PS1? What challenges do you anticipate?*
+
+## Data Setup and Package Loading
+
+### Loading Required Packages
+
+Instead of using the package manager to activate the environment each time, we can do it programmatically.
+This approach ensures we're using the correct package versions and may help you avoid some common environment issues.
+
+```{julia}
+#| output: false
+using Pkg
+lab_dir = dirname(@__FILE__)  # <1>
+Pkg.activate(lab_dir)
+# Pkg.instantiate() # uncomment this the first time you run the lab to install packages, then comment it back
+```
+
+1. Get the directory path where this notebook file is located
+
+We can load in some packages for Bayesian analysis.
+See [Turing](https://turinglang.org/) and [ArviZ](https://arviz-devs.github.io/ArviZ.jl/dev/quickstart/) docs for more details.
+
+```{julia}
+#| output: false
+using Turing
+using ArviZ
+using Distributions
+using Random
+using NCDatasets
+using Optim
+```
+
+We use [Makie](https://docs.makie.org/) with the CairoMakie backend for high-quality plotting and set it to output images as SVG files for crisp rendering:
+
+```{julia}
+#| output: false
+using CairoMakie
+CairoMakie.activate!(type="svg")
+```
+
+We load some utility packages for data manipulation and downloading files.
+See the [TidierData](https://tidierorg.github.io/TidierData.jl/latest/) docs for more details on the `@chain` macro syntax.
+
+```{julia}
+#| output: false
+using Downloads
+using DataFrames
+ENV["DATAFRAMES_ROWS"] = 5
+using TidierData
+```
+
+Next, we include some utility functions from previous labs.
+Note that this file loads several additional packages that are not explicitly loaded here.
+
+```{julia}
+#| output: false
+include("util.jl")
+```
+
+Finally, it's good practice to set a random seed for reproducible results across different runs:
+
+```{julia}
+#| output: false
+rng = MersenneTwister(543)
+```
+
+### Loading Houston Precipitation Data
+
+We'll use the same Texas precipitation dataset from Labs 2 and 3, using a [`let...end`](https://docs.julialang.org/en/v1/manual/variables-and-scoping/#Let-Blocks) block to encapsulate the download and reading logic so that variables don't leak into the global scope.
+
+```{julia}
+#| output: false
+stations, rainfall_data = let  # <1>
+    precip_fname = joinpath(lab_dir, "dur01d_ams_na14v11.txt")
+    url = "https://hdsc.nws.noaa.gov/pub/hdsc/data/tx/dur01d_ams_na14v11.txt"
+
+    if !isfile(precip_fname)
+        Downloads.download(url, precip_fname)
+    end
+    read_noaa_data(precip_fname)
+end
+```
+
+1. Use a `let...end` block for local scoping of temporary variables
+
+`let...end` blocks keep variables scoped locally, so if you try to access `precip_fname` or `url` outside the block, you'll get an error.
+
+Next, choose the same station you used in Lab 3 for your analysis.
+
+
+```{julia}
+my_stnid = 111  # REQUIRED: replace with your chosen station ID
+my_station = @chain stations begin
+    @filter(stnid == !!my_stnid)  # <1>
+    first
+end
+my_rainfall = @chain rainfall_data begin
+    @filter(stnid == !!my_stnid)
+    @arrange(date)
+end
+
+station_time_series = let
+    fig = Figure(size=(1000, 400))
+    ax = Axis(fig[1, 1], xlabel="Year", ylabel="Annual Max Rainfall (inches)",
+        title="Annual Maximum Rainfall at $(my_station.name), TX")
+    years = my_rainfall.year
+    rain = ustrip.(u"inch", my_rainfall.rainfall)  # <2>
+    lines!(ax, years, rain, color=:blue)
+    scatter!(ax, years, rain, color=:blue, markersize=8)
+    fig
+end
+```
+
+1. The !! escapes the variable for use inside the macro
+2. Remove physical units for plotting (convert to plain numbers)
+
+## Iterative Prior Development
+
+**Before looking at any data**, think about what you know about extreme rainfall in Houston.
+What's your frame of reference?
+Are you thinking about:
+
+- General knowledge of rainfall patterns anywhere?
+- Houston's specific climate characteristics?
+- Personal experience with storms?
+- Engineering design standards?
+
+As a starting point, I wrote down some initial very weak priors. 
+However, they are likely not very realistic for Houston's climate.
+We will iteratively refine them based on [prior predictive checks](https://arxiv.org/abs/2011.01808) and domain knowledge.
+
+```{julia}
+#| output: false
+@model function gev_model(y)
+    μ ~ Normal(3.0, 3.0)
+    log_σ ~ Normal(0.0, 1.0)  # <1>
+    ξ ~ Normal(0.0, 0.3)
+    σ = exp(log_σ)  # <2>
+    dist = GeneralizedExtremeValue(μ, σ, ξ)
+    if length(y) > 0  # <3>
+        for i in eachindex(y)
+            y[i] ~ dist
+        end
+    end
+end
+```
+
+1. Log-scale parameter prior (ensures σ > 0 after transformation)
+2. Transform log-scale to positive scale parameter
+3. Only fit to data if observations are provided (allows prior-only sampling)
+
+Prior predictive checking asks us to simulate data from our prior distributions and see if the simulated data looks reasonable.
+While the typical approach is to simulate $y_{\text{rep}} \sim p(y | \theta)$, we can also look at the return level curves, which we can compute directly from the parameters.
+
+First, we need to draw samples from our prior distribution.
+Turing helps us with this by allowing us to run MCMC with no data, which effectively samples from the prior only.
+
+```{julia}
+#| warning: false
+#| output: false
+function load_or_sample(fname, model; overwrite=false, n_chains=4, samples_per_chain=2000, sampler=NUTS(), threading=MCMCThreads(), rng=rng)
+    idata = try
+        @assert !overwrite "Reading from cache disabled by overwrite=true"  # <1>
+        idata = ArviZ.from_netcdf(fname)
+        @info "Loaded cached prior samples from $fname"
+        return idata
+    catch
+        chains = sample(
+            model,
+            sampler,
+            threading,
+            Int(ceil(samples_per_chain * n_chains)),  # <2>
+            n_chains, # number of chains
+            verbose=false,
+        )
+        idata = ArviZ.from_mcmcchains(chains)
+        ArviZ.to_netcdf(idata, fname)
+        @info "Sampled and cached prior samples to $fname"
+        return idata
+    end
+end
+```
+
+1. Check if overwrite flag allows loading from cache
+2. Calculate total number of samples across all chains
+
+```{julia}
+#| output: false
+prior_idata_v1 = let
+    fname = joinpath(lab_dir, "prior_v1.nc")
+    model = gev_model([])  # <1>
+    overwrite = true # <2>
+    load_or_sample(fname, model; overwrite=overwrite)
+end
+prior_GEVs_v1 = vec(GeneralizedExtremeValue.(prior_idata_v1.posterior.μ, exp.(prior_idata_v1.posterior.log_σ), prior_idata_v1.posterior.ξ))
+```
+
+1. Create model with empty data array (prior-only sampling)
+2. Set `overwrite=true` to force re-sampling from the prior; set to `false` to load cached samples
+
+We can see that this returns an object of type `InferenceData`. 
+Click on the triangles to expand and see more.
+(Annoyingly, even though we sampled from the prior only, ArviZ still calls it "posterior" unless we do a rather painful workaround Let's not get hung up on that.)
+Extract the parameter samples and create the prior predictive visualization.
+Each line represents a different possible return level curve from our prior beliefs.
+
+```{julia}
+let
+    fig = Figure(size=(1200, 600))
+    ax = Axis(fig[1, 1], xlabel="Return Period (years)", ylabel="Return Level (inches)",
+        title="Prior v1 Predictive Distribution", xscale=log10, xticks=[1, 2, 5, 10, 25, 50, 100, 250])
+    rts = logrange(1.1, 250, 500)
+    for i in rand(1:length(prior_GEVs_v1), 250)
+        gev = prior_GEVs_v1[i]
+        add_return_level_curve!(ax, gev, rts; color=(:blue, 0.125))
+    end
+    ylims!(ax, 0, 75)
+    fig
+end
+```
+
+::: {.callout-note}
+## Think
+
+Are these return level curves reasonable for Houston's climate, based on your domain knowledge?
+:::
+
+### Priors on Return Levels
+
+The first iteration showed that parameter-based priors can produce unrealistic scenarios.
+One of the key challenges is that we write a prior over the parameters themselves, but they are not in fact independent.
+Instead of thinking about abstract GEV parameters ($\mu$, $\sigma$, $\xi$), let's specify priors on quantities we understand: **return levels**.
+
+Return levels are much more intuitive for domain experts:
+
+- "The 2-year flood should be around 5 inches"
+- "The 100-year flood might be 15-20 inches"
+- "A 500-year event could reach 25+ inches"
+
+We encode these believes as a Julia data type, called a `struct`, and pass in the return period in years, the mean return level, and the standard deviation (uncertainty) around that mean.
+Under the hood, it converts these to an Inverse Gamma distribution, which is lower-bounded at zero and has a long right tail, which is appropriate for rainfall amounts.
+
+Start by defining your return level beliefs.
+
+```{julia}
+#| output: false
+return_level_priors = [
+    ReturnLevelPrior(2, 3.0, 1.5),
+    ReturnLevelPrior(10, 8.0, 4),
+    ReturnLevelPrior(50, 12.0, 6),
+    ReturnLevelPrior(100, 16, 8),
+]
+```
+
+We can pass these into our Turing model
+
+```{julia}
+#| output: false
+@model function gev_model_quantile_priors(y; return_level_priors=[])
+
+    μ ~ Normal(3.0, 3.0)
+    log_σ ~ Normal(0.0, 1.0)
+    ξ ~ Normal(0.0, 0.3)
+    σ = exp(log_σ)
+    dist = GeneralizedExtremeValue(μ, σ, ξ)
+
+    # Apply return level constraints
+    for prior in return_level_priors
+        rl = quantile(dist, prior.quantile)  # <1>
+        if rl > 0.1
+            Turing.@addlogprob!(loglikelihood(prior.distribution, rl))  # <2>
+        else
+            Turing.@addlogprob!(-Inf)  # <3>
+        end
+    end
+
+    # Data likelihood
+    if length(y) > 0
+        y .~ dist
+    end
+end
+```
+
+1. Calculate the return level for this prior's return period
+2. Add log-probability of return level under the prior distribution
+3. Assign impossible probability to negative return levels
+
+As before, we generate these samples
+
+```{julia}
+#| output: false
+prior_idata_v2 = let
+    fname = joinpath(lab_dir, "prior_v2.nc")
+    model = gev_model_quantile_priors([]; return_level_priors=return_level_priors)
+    overwrite = true
+    load_or_sample(fname, model; overwrite=overwrite)
+end
+prior_GEVs_v2 = vec(GeneralizedExtremeValue.(prior_idata_v2.posterior.μ, exp.(prior_idata_v2.posterior.log_σ), prior_idata_v2.posterior.ξ))
+```
+
+We can compare these two prior versions side by side
+
+```{julia}
+fig_prior_comparison = let
+    rts = logrange(1.1, 250, 500)
+    xticks = [1, 2, 5, 10, 25, 50, 100, 250]
+    fig = Figure(size=(1200, 600))
+    ax1 = Axis(fig[1, 1], xlabel="Return Period (years)", ylabel="Return Level (inches)", title="Prior v1 Predictive Distribution", xscale=log10, xticks=xticks)
+    posterior_bands!(ax1, prior_GEVs_v1, rts; color=(:blue, 0.2), ci=0.90)
+    posterior_mean_curve!(ax1, prior_GEVs_v1, rts; color=:blue, linewidth=3)
+    ax2 = Axis(fig[1, 2], xlabel="Return Period (years)", ylabel="Return Level (inches)", title="Prior v2 Predictive Distribution", xscale=log10, xticks=xticks)
+    posterior_bands!(ax2, prior_GEVs_v2, rts; color=(:blue, 0.2), ci=0.90)
+    posterior_mean_curve!(ax2, prior_GEVs_v2, rts; color=:blue, linewidth=3)
+    linkaxes!(ax1, ax2)
+    fig
+end
+```
+
+::: {.callout-note}
+## Think
+
+Do these make sense?
+Are the uncertainties too tight or too wide?
+Go back and revise your `return_level_priors` if needed.
+When you're happy with your answers, set `overwrite=false` so you can load cached results in the future.
+:::
+
+## Inference 
+
+Now we move from prior-only analysis to combining our prior beliefs with the observed rainfall data!
+
+### Extracting Station Data
+
+First, let's prepare the actual rainfall data for our primary station.
+We'll define the model with the return level priors you specified above.
+It is very important to drop the missing values from your observed data -- otherwise Turing will treat the missing values as parameters to sample, which is useful for imputation but not what we want here.
+
+```{julia}
+#| output: false
+y_obs = collect(skipmissing(ustrip.(u"inch", my_rainfall.rainfall)))  # <1>
+bayes_model = gev_model_quantile_priors(y_obs; return_level_priors=return_level_priors)
+```
+
+1. Remove Unitful units since Turing.jl works with plain numbers, and skip missing values
+
+### Point Estimates: MLE and MAP
+
+Before comparing the full posterior distribution to our prior beliefs, let's also compute point estimates for comparison.
+Maximum likelihood estimation (MLE) finds the single parameter values that maximize the likelihood of observing our data.
+Maximum a posteriori (MAP) estimation finds the parameter values that maximize the posterior probability (combining likelihood and prior).
+
+We can look at `optim_result` from the MLE optimization to see if it thinks it converged
+
+```{julia}
+mle_estimate = maximum_likelihood(bayes_model, NelderMead(); maxiters=1_000)
+mle_estimate.optim_result
+```
+
+Similarly for MAP
+
+```{julia}
+map_estimate = maximum_a_posteriori(bayes_model, NelderMead(); maxiters=1_000)
+map_estimate.optim_result
+```
+
+We can save the resulting GEV distributions for later plotting
+
+```{julia}
+#| output: false
+mle_dist = GeneralizedExtremeValue(mle_estimate.values[1], exp(mle_estimate.values[2]), mle_estimate.values[3])
+map_dist = GeneralizedExtremeValue(map_estimate.values[1], exp(map_estimate.values[2]), map_estimate.values[3])
+```
+
+### Bayesian Posterior Sampling
+
+```{julia}
+#| output: false
+posterior_idata = let
+    fname = joinpath(lab_dir, "posterior_data.nc")
+    overwrite = true
+    load_or_sample(fname, bayes_model; overwrite=overwrite)
+end
+posterior_GEVs = vec(GeneralizedExtremeValue.(posterior_idata.posterior.μ, exp.(posterior_idata.posterior.log_σ), posterior_idata.posterior.ξ))
+```
+
+Let's compare the prior and posterior distributions visually.
+
+```{julia}
+let
+    fig = Figure(size=(900, 500))
+    rts = logrange(1.1, 250, 500)
+    ax1 = Axis(fig[1, 1], xlabel="Return Period (years)", ylabel="Return Level (inches)",
+        title="Return Level Uncertainty: Prior vs Posterior", xscale=log10, xticks=[1, 2, 5, 10, 25, 50, 100, 250])
+    posterior_bands!(ax1, prior_GEVs_v2, rts; color=(:blue, 0.2), ci=0.90, label="Prior 90% CI")
+    posterior_bands!(ax1, posterior_GEVs, rts; color=(:orange, 0.4), ci=0.90, label="Posterior 90% CI")
+    posterior_mean_curve!(ax1, posterior_GEVs, rts; color=:blue, linewidth=3, label="Posterior Mean")
+
+    mean_return_levels = [quantile(mle_dist, 1 - 1 / T) for T in rts]
+    lines!(ax1, rts, mean_return_levels, color=:red, linewidth=3, label="MLE")
+
+    axislegend(ax1; position=:lt)
+    fig
+end
+```
+
+We can see that both the posterior and the MLE give us similar point estimates, but the Bayesian posterior gives us a full uncertainty distribution, which is very useful for risk assessment.
+
+## Diagnostics
+
+To make sure that our model is reliable, we need to check that our MCMC sampling converged and that our model fits the data well.
+We can use automatically generated summary statistics to do this:
+
+```{julia}
+ArviZ.summarize(posterior_idata)
+```
+
+We can look for:
+
+- $\hat{R}$ values close to 1.0 (indicates chains have converged to same distribution)
+- Effective sample sizes (`ess_tail` and `ess_bulk`) that are reasonably large (as close to the total number of samples as possible)
+
+These are not guarantees of convergence, but they indicate the absence of obvious problems.
+$\hat{R} > 1.01$ or low effective sample sizes suggest the chains haven't mixed well.
+
+We can also look at trace plots and marginal densities for each parameter.
+
+```{julia}
+function plot_trace_diagnostics(idata, title_prefix="")  # <1>
+    fig = Figure(size=(1200, 400))
+
+    # Extract chain x draw arrays for each parameter
+    μ_arr = Array(idata.posterior.μ)  # <2>
+    log_σ_arr = Array(idata.posterior.log_σ)  # <3>
+    ξ_arr = Array(idata.posterior.ξ)  # <4>
+    ndraws, nchains = size(μ_arr)  # <5>
+
+    # Trace plots per chain
+    ax1 = Axis(fig[1, 1], xlabel="Iteration", ylabel="μ",
+        title="$title_prefix Location Parameter Trace")
+    for c in 1:nchains  # <6>
+        lines!(ax1, 1:ndraws, μ_arr[:, c], label="Chain $(c)")  # <7>
+    end
+    axislegend(ax1; position=:lb)
+
+    ax2 = Axis(fig[1, 2], xlabel="Iteration", ylabel="log(σ)",
+        title="$title_prefix Log-Scale Parameter Trace")
+    for c in 1:nchains
+        lines!(ax2, 1:ndraws, log_σ_arr[:, c])
+    end
+
+    ax3 = Axis(fig[1, 3], xlabel="Iteration", ylabel="ξ",
+        title="$title_prefix Shape Parameter Trace")
+    for c in 1:nchains
+        lines!(ax3, 1:ndraws, ξ_arr[:, c])
+    end
+
+    return fig
+end
+fig_trace_primary = plot_trace_diagnostics(posterior_idata, "Primary Station:")
+```
+
+1. Function to create trace plots for MCMC diagnostics
+2. Extract location parameter samples as a 2D array (draws × chains)
+3. Extract log-scale parameter samples
+4. Extract shape parameter samples
+5. Get dimensions: number of draws per chain and number of chains
+6. Loop over each MCMC chain
+7. Plot the trace (parameter value vs. iteration) for each chain
+
+```{julia}
+function plot_marginal_densities(idata, title_prefix="")
+    fig = Figure(size=(1200, 400))
+
+    # Extract chain x draw arrays for each parameter
+    μ_arr = Array(idata.posterior.μ)
+    log_σ_arr = Array(idata.posterior.log_σ)
+    ξ_arr = Array(idata.posterior.ξ)
+
+    # Marginal densities aggregated across chains
+    ax1 = Axis(fig[1, 1], xlabel="μ", ylabel="Density",
+        title="$title_prefix Location Posterior")
+    hist!(ax1, vec(μ_arr), bins=50, normalization=:pdf, color=(:blue, 0.7))
+
+    ax2 = Axis(fig[1, 2], xlabel="log(σ)", ylabel="Density",
+        title="$title_prefix Log-Scale Posterior")
+    hist!(ax2, vec(log_σ_arr), bins=50, normalization=:pdf, color=(:blue, 0.7))
+
+    ax3 = Axis(fig[1, 3], xlabel="ξ", ylabel="Density",
+        title="$title_prefix Shape Posterior")
+    hist!(ax3, vec(ξ_arr), bins=50, normalization=:pdf, color=(:blue, 0.7))
+
+    return fig
+end
+
+fig_densities_primary = plot_marginal_densities(posterior_idata, "Primary Station:")
+```
+
+## Two-Station Comparison
+
+In lab 3, you compared MLE return levels between two stations.
+Now we'll do a full Bayesian comparison using the same framework.
+
+### Selecting a Comparison Station
+
+```{julia}
+nearest_stations = find_nearest_stations(my_station, stations, 5)
+```
+
+We will pick one of these five nearest stations for comparison
+
+```{julia}
+comparison_stnid = 478 # MODIFY THIS AND CHOOSE YOUR COMPARISON
+
+comparison_station = @chain stations begin
+    @filter(stnid == !!comparison_stnid)
+    first
+end
+comparison_data = @chain rainfall_data begin
+    @filter(stnid == !!comparison_stnid)
+    @arrange(date)
+end
+
+# plot both stations' data for visual comparison
+function plot_two_stations(station1, data1, station2, data2)
+    fig = Figure(size=(800, 400))
+    ax = Axis(fig[1, 1], xlabel="Year", ylabel="Annual Max Rainfall (inches)",
+        title="Annual Maximum Rainfall: $(station1.name) vs $(station2.name)")
+
+    years1 = data1.year
+    rain1 = ustrip.(u"inch", data1.rainfall)
+    lines!(ax, years1, rain1, color=:purple, label=station1.name)
+    scatter!(ax, years1, rain1, color=:purple, markersize=8)
+
+    years2 = data2.year
+    rain2 = ustrip.(u"inch", data2.rainfall)
+    lines!(ax, years2, rain2, color=:orange, label=station2.name)
+    scatter!(ax, years2, rain2, color=:orange, markersize=8)
+
+    axislegend(ax; position=:rt)
+    return fig
+end
+plot_two_stations(my_station, my_rainfall, comparison_station, comparison_data)
+```
+
+We will use the same model and priors for the comparison station, assuming similar climate.
+
+```{julia}
+#| output: false
+posterior_idata_comp = let
+    fname = joinpath(lab_dir, "posterior_data_comp.nc")
+    y_obs_comp = collect(skipmissing(ustrip.(u"inch", comparison_data.rainfall)))
+    model = gev_model_quantile_priors(y_obs_comp; return_level_priors=return_level_priors)
+    overwrite = true
+    load_or_sample(fname, model; overwrite=overwrite)
+end
+posterior_GEVs_comp = vec(GeneralizedExtremeValue.(posterior_idata_comp.posterior.μ, exp.(posterior_idata_comp.posterior.log_σ), posterior_idata_comp.posterior.ξ))
+```
+
+We conduct the same diagnostics for the comparison station
+
+```{julia}
+plot_trace_diagnostics(posterior_idata_comp, "Comparison Station:")
+```
+
+```{julia}
+fig_densities_comparison = plot_marginal_densities(posterior_idata_comp, "Comparison Station:")
+```
+
+We can compare the return level uncertainties between the two stations
+
+```{julia}
+fig_rl_comp = let
+    rts = logrange(1.1, 250, 500)
+    xticks = [1, 2, 5, 10, 25, 50, 100, 250]
+    fig = Figure(size=(1200, 600))
+
+    ax1 = Axis(fig[1, 1], xlabel="Return Period (years)", ylabel="Return Level (inches)",
+        title="$(my_station.name)", xscale=log10, xticks=xticks)
+    posterior_bands!(ax1, posterior_GEVs, rts; color=(:blue, 0.2), ci=0.90)
+    posterior_mean_curve!(ax1, posterior_GEVs, rts; color=:blue, linewidth=3)
+
+    ax2 = Axis(fig[1, 2], xlabel="Return Period (years)", ylabel="Return Level (inches)",
+        title="$(comparison_station.name)", xscale=log10, xticks=xticks)
+    posterior_bands!(ax2, posterior_GEVs_comp, rts; color=(:orange, 0.2), ci=0.90)
+    posterior_mean_curve!(ax2, posterior_GEVs_comp, rts; color=:orange, linewidth=3)
+
+    linkaxes!(ax1, ax2)
+    fig
+end
+```
+
+::: {.callout-note}
+## Think
+Compare the posterior distributions between the two stations.
+Do the stations show similar extreme rainfall patterns?
+Which parameters differ most between stations?
+How might geographic or climatic factors explain these differences?
+Should we have used different priors for each station?
+Do the return level uncertainties overlap significantly, or are they distinct?
+What does this tell you about spatial variability in extreme precipitation?
+:::
