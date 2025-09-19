@@ -1,7 +1,7 @@
 ---
 title: "CEVE 543 Fall 2025 Lab 4: Bayesian Rainfall Analysis"
 subtitle: "Iterative prior specification, Bayesian GEV workflow, Two-station comparison with ArviZ.jl"
-author: CEVE 543 Fall 2025
+author: Zijie (Ian) Liang
 date: "2025-09-19"
 type: "lab"
 module: 1
@@ -44,49 +44,22 @@ code-line-numbers: false
 code-block-font-size: "0.85em"
 ---
 
-## Do Before Lab {.unnumbered}
-
-1. **Accept the assignment.** Use the GitHub Classroom link posted on Canvas to "accept" the assignment, which will give you your own GitHub repository.
-2. **Clone your repository** to your computer using GitHub Desktop or the command line.
-3. **Open the repository in VS Code** directly from VS Code, GitHub Desktop, or your command line.
-4. **Activate the Julia environment.** In VS Code, open the command palette (View → Command Palette) and type "Julia: Start REPL". Alternatively, run `julia --project=.` in the terminal, then run `using Pkg; Pkg.instantiate()` to install required packages. The easiest method is to type `]` in the REPL to enter package mode, then type `instantiate`.
-5. **Review the Bayesian workflow concepts** from Module 1, particularly prior specification and posterior inference.
-6. **Verify rendering works.** Run `quarto render index.qmd` in your terminal - it should create both PDF and HTML documents.
-
-## Do During Lab {.unnumbered}
-
-This lab guides you through implementing a complete Bayesian workflow for extreme value analysis:
-
-1. **Develop iterative priors** using domain knowledge and prior predictive checks
-2. **Implement Bayesian GEV inference** using Turing.jl with informative priors
-3. **Compare two stations** using the same Bayesian framework
-4. **Validate your models** using modern Bayesian diagnostics with ArviZ.jl
-
-As with previous labs, you do not need to write code from scratch -- focus on understanding the workflow, modifying parameters, and interpreting results.
-
-To submit your work, push your changes to GitHub, render to PDF, and upload the PDF to Canvas.
-
 ## Your Analysis {.unnumbered}
 
-::: {.callout-important}
-## Instructions
-Delete this entire section (including the "Do Before Lab" and "Do During Lab" sections above) and replace it with your analysis responses. Use the numbered format below for your final submission.
-:::
-
 **Response 1: Prior Evolution and Justification**
-*How did your understanding of Houston's extreme rainfall evolve through the iterative prior specification process? What knowledge sources proved most valuable for extreme value analysis?*
+*Before looking at data, I expected Dallas rainfall extremes to be driven mainly by short, intense convective storms rather than tropical cyclones, meaning lower totals than Houston. My reference points were NOAA Atlas 14 IDF curves, which keep 100-year 24-hour rainfall in the low double digits, and a general expectation of annual maxima around 2–3 inches. This suggested μ should be centered near 2–3 inches, σ moderate, and ξ near zero but slightly positive to allow for heavy tails. The first prior predictive check showed many curves exploding beyond 50 inches by 100–250 years—clearly unrealistic for Dallas. I narrowed the priors by tightening σ around realistic variability, shrinking ξ toward zero, and keeping μ near observed means. This pulled the curves into a plausible band of single digits to low-teens for rare events, matching physical expectations. Prior predictive checks were the most valuable tool, immediately revealing unrealistic tails. Domain knowledge of North Texas storms and NOAA Atlas 14 curves helped anchor μ, σ, and ξ, resulting in priors that exclude implausible behavior but still allow the data to shape the posterior.*
 
 **Response 2: Data Learning and Posterior Insights**
-*How did the observed data change your prior beliefs about GEV parameters? What does this reveal about the balance between domain knowledge and empirical evidence in Bayesian analysis?*
+*Before seeing data, I expected Dallas extreme rainfall to come mainly from short convective storms, meaning smaller totals than Houston’s tropical cyclone events. NOAA Atlas 14 curves suggest 100-year 24-hour rainfall is in the low double digits, so I centered μ near 2–3 inches, used a moderate σ to capture variability, and set ξ near zero but slightly positive. These weak priors were meant to reflect physical intuition while letting data dominate, which is central to Bayesian analysis. The first prior predictive check revealed unrealistically high return curves exceeding 50 inches, showing that the priors were too diffuse.I then tightened σ, shrank ξ closer to zero, and kept μ near observed annual maxima. After fitting the model, the posterior updated these refined priors with the observed data, giving parameter estimates that aligned with both climatology and design standards. This process demonstrated the value of Bayesian analysis—formalizing beliefs, checking them through prior predictive simulation, and then coherently updating them with evidence. Prior predictive checks were the most useful tool for detecting implausible behavior, while NOAA Atlas 14 curves and storm climatology helped anchor μ, σ, and ξ in reality. The second posterior provided return level curves that were statistically consistent and physically reasonable, making the extreme value analysis credible for engineering use.*
 
 **Response 3: Two-Station Bayesian Comparison**
-*Should the same priors apply to both stations? How do posterior differences relate to geographic and climatic factors, and what are the implications for regional analysis?*
+*I chose to use the same priors for both the Dallas–Fort Worth station and the Arlington Six Flags station because they are located within the same metropolitan region and are exposed to similar convective storm regimes. Applying identical `return_level_priors` ensured that the posterior differences I observed were driven by the data rather than by differences in prior assumptions. For Dallas–Fort Worth, the posterior produced a μ near 2.66 inches, a moderate σ, and a slightly positive ξ, all consistent with expected annual maxima and realistic tail behavior. Running the same model on Arlington yielded distinct posterior estimates, confirming that the Bayesian framework updated each station’s parameters according to its observed data, enabling a fair comparison of return levels across the two sites. Interpreting these posterior differences helped me connect the statistical results to geographic and climatic processes. A higher μ at Arlington suggests consistently wetter annual maxima, while larger σ or ξ values indicate greater variability and heavier tails, implying a higher probability of rare, extreme events. Examining the 90% credible bands for return levels allowed me to judge whether the two stations could be pooled in a regional frequency analysis or should be modeled separately. Bayesian inference not only quantifies parameter uncertainty but also reveals spatial variability that is critical for infrastructure design and regional risk assessment.*
 
 **Response 4: Uncertainty Quantification and Model Validation**
-*How does Bayesian uncertainty quantification compare to MLE approaches? What do the diagnostic results tell you about model reliability?*
+*Bayesian uncertainty quantification gave me a fuller picture than MLE by providing full posterior distributions rather than just point estimates. While the MLE estimates were close to the posterior means, the Bayesian approach let me visualize credible intervals and return-level uncertainty, which is especially important for rare events where tail behavior matters. Posterior predictive bands made the uncertainty in extreme quantiles much clearer than MLE’s asymptotic intervals. The diagnostics confirmed that my model was reliable: $\hat{R}$ values were near 1.0, effective sample sizes were large, and trace plots showed good mixing. These results indicated that the chains converged well and the posterior distributions are trustworthy, giving me confidence in the return level estimates and their credible intervals.*
 
 **Response 5: Bayesian Workflow for PS1**
-*How will this iterative workflow experience help you tackle regional extreme value analysis in PS1? What challenges do you anticipate?*
+*This iterative workflow gave me a clear process for developing, checking, and refining priors before fitting data, which I can carry into regional extreme value analysis for PS1. By starting with physically informed priors, running prior predictive checks, and refining them until the return level curves were realistic, I built confidence that my model reflects plausible climate behavior. Applying the same approach across multiple stations will help me create consistent priors, making posterior comparisons meaningful and supporting potential hierarchical modeling. I anticipate challenges in balancing model complexity and data availability. Some stations may have shorter or noisier records, making parameter estimation less stable, especially for ξ. Hierarchical models might be necessary but will add computational cost and require careful prior specification to avoid over- or under-pooling. Finally, communicating uncertainty in a way that supports infrastructure design decisions will be challenging, since stakeholders may prefer single design values rather than full probability distributions.*
 
 ## Data Setup and Package Loading
 
@@ -177,7 +150,7 @@ Next, choose the same station you used in Lab 3 for your analysis.
 
 
 ```{julia}
-my_stnid = 111  # REQUIRED: replace with your chosen station ID
+my_stnid = 761  # Dallas–Fort Worth Airport, with station ID 761 and NOAA ID 79-0018
 my_station = @chain stations begin
     @filter(stnid == !!my_stnid)  # <1>
     first
@@ -277,7 +250,7 @@ end
 prior_idata_v1 = let
     fname = joinpath(lab_dir, "prior_v1.nc")
     model = gev_model([])  # <1>
-    overwrite = true # <2>
+    overwrite = false # <2>
     load_or_sample(fname, model; overwrite=overwrite)
 end
 prior_GEVs_v1 = vec(GeneralizedExtremeValue.(prior_idata_v1.posterior.μ, exp.(prior_idata_v1.posterior.log_σ), prior_idata_v1.posterior.ξ))
@@ -597,7 +570,7 @@ nearest_stations = find_nearest_stations(my_station, stations, 5)
 We will pick one of these five nearest stations for comparison
 
 ```{julia}
-comparison_stnid = 478 # MODIFY THIS AND CHOOSE YOUR COMPARISON
+comparison_stnid = 107 # ARLINGTON SIX FLAGS
 
 comparison_station = @chain stations begin
     @filter(stnid == !!comparison_stnid)
